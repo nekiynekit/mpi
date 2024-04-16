@@ -14,40 +14,64 @@ def in_master(rank):
     return master == rank
 
 
-def get_chunk_params(i, k, length):
-    q = length % k
-    p = length // k
-    chunk_start = (p + 1) * min(i, q) + p * max(0, i - q)
-    chunk_size = p
-    if i < q:
-        chunk_size += 1
-    chunk_start *= sizeof
+def precalc_rcount_disples(comm, rank, size, length):
+    if rank == 0:
+        ave, res = divmod(length, size - 1)
+        rcounts = empty(size, dtype=np.int32)
+        displs = empty(size, dtype=np.int32)
+
+        rcounts[0] = 0
+        displs[0] = 0
+
+        for k in range(1, size):
+            rcounts[k] = ave + 1 if k <= res else ave
+            displs[k] = displs[k - 1] + rcounts[k - 1]
+
+    else:
+        rcounts = empty(size, dtype=np.int32)
+        displs = empty(size, dtype=np.int32)
+
+    comm.Bcast([rcounts, size, MPI.INT], root=0)
+    comm.Bcast([displs, size, MPI.INT], root=0)
+
+    return rcounts, displs
+
+
+def get_chunk_params(i, rcounts, disples):
+    chunk_size = rcounts[i]
+    chunk_start = disples[i]
     return chunk_start, chunk_size
 
 
-def calc_sum(comm, rank, size, length, file, no_output):
+def calc_sum(comm, rank, size, file, no_output, rcounts, disples):
 
-    status = MPI.Status()
-
-    chunk_start, chunk_size = get_chunk_params(rank, size, length)
+    # get sizes and starts
+    chunk_start, chunk_size = get_chunk_params(rank, rcounts, disples)
     buf = empty(chunk_size, dtype=np.int32)
 
-    file.Read_at_all(chunk_start, [buf, chunk_size, MPI.INT32_T])
+    # reading a file
+    file.Read_at_all(chunk_start * sizeof, [buf, chunk_size, MPI.INT32_T])
     if not no_output:
+        print(f"{chunk_start=}, {chunk_size=}")
         print(f"{rank}th processes buf: {buf}")
 
+    # get subsum
     result = array(sum(buf), dtype=np.int64)
+
+    # send subsum to master process
+    rcounts = array([min(1, i) for i in range(size)], dtype=np.int32)
+    disples[1:] = [i for i in range(size - 1)]
     if in_master(rank):
-        subsums = result
-        chunk = empty(1, dtype=np.int64)
-        for idx in range(1, size):
-            comm.Recv([chunk, 1, MPI.INT64_T], source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
-            subsums += chunk[0]
-        global_sum = subsums
+        terms = empty(size - 1, dtype=np.int64)
+    else:
+        terms = None
+    comm.Gatherv([result, 1, MPI.INT64_T], [terms, rcounts, disples, MPI.INT64_T], root=0)
+
+    # printing result
+    if in_master(rank):
+        global_sum = sum(terms)
         if not no_output:
             print(f"Data collected, sum = {global_sum}")
-    else:
-        comm.Send([result, 1, MPI.INT64_T], dest=master, tag=0)
 
 
 @click.command()
@@ -62,12 +86,11 @@ def cli(filename, length, no_output):
 
     size = comm.Get_size()
     rank = comm.Get_rank()
-
-    # print(f"{rank}, {size}")
+    rcounts, disples = precalc_rcount_disples(comm, rank, size, length)
 
     file = MPI.File.Open(comm, filename, amode=MPI.MODE_WRONLY)
 
-    calc_sum(comm, rank, size, length, file, no_output)
+    calc_sum(comm, rank, size, file, no_output, rcounts, disples)
     file.Close()
 
     if in_master(rank):
