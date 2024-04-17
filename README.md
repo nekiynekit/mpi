@@ -11,4 +11,4 @@
 python sources/<имя скрипта>.py --help
 ```
 ### Графики 
-![alt text](https://github.com/nekiynekit/mpi/plots/blob/main/result_1.png)
+![alt text](https://github.com/nekiynekit/mpi/blob/main/plots/result_1.png)
