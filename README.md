@@ -10,5 +10,8 @@
 ```bash
 python sources/<имя скрипта>.py --help
 ```
-### Графики 
+## Графики 
+### Задание 2
 ![alt text](https://github.com/nekiynekit/mpi/blob/main/plots/result_1.png)
+## Задание 3
+![alt tezt](https://github.com/nekiynekit/mpi/blob/main/plots/result_2.png)
